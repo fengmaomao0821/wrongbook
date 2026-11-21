@@ -1,5 +1,5 @@
 /* 离线缓存：应用外壳缓存优先，保证断网也能打开并记录错题。 */
-const CACHE_NAME = 'wrongbook-pwa-v4';
+const CACHE_NAME = 'wrongbook-pwa-v5';
 const SHELL = [
   './',
   './index.html',
