@@ -1225,6 +1225,9 @@ function openCropEditor(file, onDone) {
   let layerRect = null;
   let drag = null;
   let tempBox = null;
+  let active = -1;
+  let action = null;
+  let moveStart = null;
   let closed = false;
   let overlayApi = null;
 
@@ -1256,7 +1259,7 @@ function openCropEditor(file, onDone) {
     layer.innerHTML = '';
     boxes.forEach(function (box, index) {
       const el = document.createElement('div');
-      el.className = 'crop-box';
+      el.className = 'crop-box' + (index === active ? ' active' : '');
       el.style.left = box.x + 'px';
       el.style.top = box.y + 'px';
       el.style.width = box.w + 'px';
@@ -1264,8 +1267,63 @@ function openCropEditor(file, onDone) {
       el.innerHTML = '<span class="idx">' + (index + 1) + '</span>' +
         '<button type="button" class="del" data-crop-del="' + index + '" aria-label="删除选区">×</button>';
       layer.appendChild(el);
+      if (index === active) {
+        ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].forEach(function (name) {
+          const handle = document.createElement('div');
+          handle.className = 'crop-handle h-' + name;
+          handle.dataset.handle = name;
+          el.appendChild(handle);
+        });
+      }
     });
     updateCount();
+  }
+
+  function bounds() {
+    const left = imgRect.left - layerRect.left;
+    const top = imgRect.top - layerRect.top;
+    return { left: left, top: top, right: left + imgRect.width, bottom: top + imgRect.height };
+  }
+
+  function clampBox(box) {
+    const minSize = 24;
+    const area = bounds();
+    let w = Math.max(minSize, box.w);
+    let h = Math.max(minSize, box.h);
+    let x = box.x;
+    let y = box.y;
+    if (x + w > area.right) x = area.right - w;
+    if (y + h > area.bottom) y = area.bottom - h;
+    x = Math.max(area.left, x);
+    y = Math.max(area.top, y);
+    w = Math.min(w, area.right - x);
+    h = Math.min(h, area.bottom - y);
+    return { x: x, y: y, w: w, h: h };
+  }
+
+  function hitHandle(point) {
+    if (active < 0) return null;
+    const boxesEls = layer.querySelectorAll('.crop-box');
+    const el = boxesEls[active];
+    if (!el) return null;
+    const handles = el.querySelectorAll('.crop-handle');
+    for (const handle of handles) {
+      const r = handle.getBoundingClientRect();
+      if (point.x >= r.left - 12 && point.x <= r.right + 12 && point.y >= r.top - 12 && point.y <= r.bottom + 12) {
+        return handle.dataset.handle;
+      }
+    }
+    return null;
+  }
+
+  function hitBox(point) {
+    for (let index = boxes.length - 1; index >= 0; index--) {
+      const b = boxes[index];
+      const left = layerRect.left + b.x;
+      const top = layerRect.top + b.y;
+      if (point.x >= left && point.x <= left + b.w && point.y >= top && point.y <= top + b.h) return index;
+    }
+    return -1;
   }
 
   function close() {
@@ -1279,53 +1337,103 @@ function openCropEditor(file, onDone) {
     layer.addEventListener('pointerdown', function (e) {
       if (e.target.closest('[data-crop-del]')) return;
       refreshRects();
-      if (e.clientX < imgRect.left || e.clientX > imgRect.right || e.clientY < imgRect.top || e.clientY > imgRect.bottom) return;
+      const point = { x: e.clientX, y: e.clientY };
+      if (point.x < imgRect.left || point.x > imgRect.right || point.y < imgRect.top || point.y > imgRect.bottom) return;
       e.preventDefault();
-      drag = {
-        x: e.clientX - layerRect.left,
-        y: e.clientY - layerRect.top
-      };
+      try { layer.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+
+      const handle = hitHandle(point);
+      if (handle) {
+        action = 'resize';
+        moveStart = { x: point.x, y: point.y, box: Object.assign({}, boxes[active]), handle: handle };
+        return;
+      }
+      const hit = hitBox(point);
+      if (hit >= 0) {
+        active = hit;
+        action = 'move';
+        moveStart = { x: point.x, y: point.y, box: Object.assign({}, boxes[active]) };
+        renderBoxes();
+        return;
+      }
+      active = -1;
+      action = 'draw';
+      drag = { x: point.x - layerRect.left, y: point.y - layerRect.top };
+      renderBoxes();
       tempBox = document.createElement('div');
       tempBox.className = 'crop-box temp';
       layer.appendChild(tempBox);
-      try { layer.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
     });
 
     layer.addEventListener('pointermove', function (e) {
-      if (!drag || !tempBox) return;
+      if (!action) return;
       e.preventDefault();
-      const curX = e.clientX - layerRect.left;
-      const curY = e.clientY - layerRect.top;
-      const left = Math.max(0, Math.min(drag.x, curX));
-      const top = Math.max(0, Math.min(drag.y, curY));
-      const width = Math.abs(curX - drag.x);
-      const height = Math.abs(curY - drag.y);
-      tempBox.style.left = left + 'px';
-      tempBox.style.top = top + 'px';
-      tempBox.style.width = width + 'px';
-      tempBox.style.height = height + 'px';
-      drag.w = width;
-      drag.h = height;
-      drag.left = left;
-      drag.top = top;
+      const point = { x: e.clientX, y: e.clientY };
+      if (action === 'draw') {
+        const curX = point.x - layerRect.left;
+        const curY = point.y - layerRect.top;
+        const left = Math.max(0, Math.min(drag.x, curX));
+        const top = Math.max(0, Math.min(drag.y, curY));
+        drag.left = left;
+        drag.top = top;
+        drag.w = Math.abs(curX - drag.x);
+        drag.h = Math.abs(curY - drag.y);
+        if (tempBox) {
+          tempBox.style.left = left + 'px';
+          tempBox.style.top = top + 'px';
+          tempBox.style.width = drag.w + 'px';
+          tempBox.style.height = drag.h + 'px';
+        }
+        return;
+      }
+      const dx = point.x - moveStart.x;
+      const dy = point.y - moveStart.y;
+      const box = boxes[active];
+      if (!box) return;
+      if (action === 'move') {
+        const next = clampBox({ x: moveStart.box.x + dx, y: moveStart.box.y + dy, w: moveStart.box.w, h: moveStart.box.h });
+        box.x = next.x;
+        box.y = next.y;
+      } else if (action === 'resize') {
+        const start = moveStart.box;
+        let left = start.x;
+        let top = start.y;
+        let right = start.x + start.w;
+        let bottom = start.y + start.h;
+        const handle = moveStart.handle;
+        if (handle.indexOf('w') >= 0) left = start.x + dx;
+        if (handle.indexOf('e') >= 0) right = start.x + start.w + dx;
+        if (handle.indexOf('n') >= 0) top = start.y + dy;
+        if (handle.indexOf('s') >= 0) bottom = start.y + start.h + dy;
+        const next = clampBox({ x: left, y: top, w: right - left, h: bottom - top });
+        box.x = next.x;
+        box.y = next.y;
+        box.w = next.w;
+        box.h = next.h;
+      }
+      renderBoxes();
     });
 
     function finishDrag(e) {
-      if (!drag || !tempBox) return;
-      const box = {
-        x: drag.left !== undefined ? drag.left : drag.x,
-        y: drag.top !== undefined ? drag.top : drag.y,
-        w: drag.w || 0,
-        h: drag.h || 0
-      };
-      const ok = box.w >= 16 && box.h >= 16;
-      drag = null;
-      if (tempBox && tempBox.parentNode) tempBox.parentNode.removeChild(tempBox);
-      tempBox = null;
-      if (ok) {
-        boxes.push(box);
+      if (!action) return;
+      if (action === 'draw') {
+        const box = {
+          x: drag.left !== undefined ? drag.left : drag.x,
+          y: drag.top !== undefined ? drag.top : drag.y,
+          w: drag.w || 0,
+          h: drag.h || 0
+        };
+        if (tempBox && tempBox.parentNode) tempBox.parentNode.removeChild(tempBox);
+        tempBox = null;
+        if (box.w >= 16 && box.h >= 16) {
+          boxes.push(clampBox(box));
+          active = boxes.length - 1;
+        }
         renderBoxes();
       }
+      action = null;
+      moveStart = null;
+      drag = null;
       try { layer.releasePointerCapture(e.pointerId); } catch (err) { /* ignore */ }
     }
 
@@ -1338,13 +1446,14 @@ function openCropEditor(file, onDone) {
       e.preventDefault();
       e.stopPropagation();
       boxes.splice(Number(del.dataset.cropDel), 1);
+      if (active >= boxes.length) active = boxes.length - 1;
       renderBoxes();
     });
   }
 
   async function confirmCrop() {
     if (!boxes.length) {
-      toast('请先在照片上框选要记录的题目（按住拖动）', 'error');
+      toast('请先框选题目，或点「用整张」跳过', 'error');
       return;
     }
     refreshRects();
@@ -1379,13 +1488,14 @@ function openCropEditor(file, onDone) {
   overlayApi = openOverlay(
     '<div class="crop-view">' +
       '<div class="crop-head">' +
-        '<span>框选要记录的题目：按住拖动，可框多个</span>' +
+        '<span>拖动框出题目；选中后可拖动 / 拉角与边调整（可框多个）</span>' +
         '<button type="button" class="icon-btn" data-crop-act="close" aria-label="关闭">' + icon('x') + '</button>' +
       '</div>' +
       '<div class="crop-stage" id="cropStage">' +
         '<img id="cropImg" alt="待裁剪照片">' +
       '</div>' +
       '<div class="crop-foot">' +
+        '<button type="button" class="btn ghost" data-crop-act="skip">用整张</button>' +
         '<button type="button" class="btn ghost" data-crop-act="clear">清除</button>' +
         '<button type="button" class="btn primary" data-crop-act="confirm">完成（0）</button>' +
       '</div>' +
@@ -1409,8 +1519,13 @@ function openCropEditor(file, onDone) {
         img.src = url;
         bindLayer();
         a.wrap.querySelector('[data-crop-act="close"]').addEventListener('click', close);
+        a.wrap.querySelector('[data-crop-act="skip"]').addEventListener('click', function () {
+          close();
+          onDone(null);
+        });
         a.wrap.querySelector('[data-crop-act="clear"]').addEventListener('click', function () {
           boxes.length = 0;
+          active = -1;
           renderBoxes();
         });
         a.wrap.querySelector('[data-crop-act="confirm"]').addEventListener('click', confirmCrop);
@@ -1479,8 +1594,8 @@ function captureMainButtons(cs) {
   '</div>' +
   '<p class="tiny muted center" style="margin-top:12px">' +
     (cs.files.length
-      ? '点图片上的「框选」可只保留其中某一道题；多张图默认合并为一题，可在上方切换为「每张各一题」。'
-      : '拍一张照片后，可用「框选」只保留需要记录的那道题。') +
+      ? '拍/选单张照片会自动进入框选；也可点图片上的「框选」重新调整。'
+      : '拍一张照片后会自动进入框选，只保留需要记录的那道题。') +
   '</p>';
 }
 
@@ -1639,6 +1754,16 @@ function handleCaptureFiles(fileList) {
   if (files.length > room) toast('最多选择 3 张图片');
   cs.error = '';
   renderCaptureScreen();
+  // 只新增一张照片时，直接进入框选（可点「用整张」跳过）
+  if (added === 1) {
+    const index = cs.files.length - 1;
+    const item = cs.files[index];
+    setTimeout(function () {
+      openCropEditor(item.file, function (crops) {
+        if (crops && crops.length) applyCrops(cs, index, crops);
+      });
+    }, 80);
+  }
 }
 
 async function startRecognize() {
