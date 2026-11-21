@@ -1,5 +1,5 @@
-/* 离线缓存：应用外壳缓存优先，保证断网也能打开并记录错题。 */
-const CACHE_NAME = 'wrongbook-pwa-v5';
+/* 离线缓存：联网时优先取新文件（保证更新能生效），断网时回退到缓存。 */
+const CACHE_NAME = 'wrongbook-pwa-v6';
 const SHELL = [
   './',
   './index.html',
@@ -21,7 +21,6 @@ self.addEventListener('install', function (event) {
     (async function () {
       const cache = await caches.open(CACHE_NAME);
       await cache.addAll(SHELL);
-      // 公式渲染组件：首次安装时尽力缓存，失败不影响核心功能
       for (const url of CDN_ASSETS) {
         try {
           const res = await fetch(url, { mode: 'cors' });
@@ -49,20 +48,37 @@ self.addEventListener('fetch', function (event) {
   const request = event.request;
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
-
-  // 跨域（AI 接口、KaTeX）交给浏览器，不拦截
   if (url.origin !== self.location.origin) return;
+
+  const destination = request.destination;
+  const networkFirst = request.mode === 'navigate'
+    || destination === 'script'
+    || destination === 'style'
+    || destination === 'document';
 
   event.respondWith(
     (async function () {
       const cache = await caches.open(CACHE_NAME);
+      if (networkFirst) {
+        try {
+          const fresh = await fetch(request);
+          if (fresh && fresh.ok) cache.put(request, fresh.clone());
+          return fresh;
+        } catch (err) {
+          const cached = await cache.match(request);
+          if (cached) return cached;
+          if (request.mode === 'navigate') {
+            const fallback = await cache.match('./index.html');
+            if (fallback) return fallback;
+          }
+          throw err;
+        }
+      }
       const cached = await cache.match(request);
       if (cached) return cached;
       try {
         const response = await fetch(request);
-        if (response && response.ok && (request.mode === 'navigate' || request.destination === 'script' || request.destination === 'style')) {
-          cache.put(request, response.clone());
-        }
+        if (response && response.ok) cache.put(request, response.clone());
         return response;
       } catch (err) {
         if (request.mode === 'navigate') {
