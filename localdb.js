@@ -6,7 +6,7 @@
 (function () {
   'use strict';
 
-  const VERSION = '1.0.0-pwa';
+  const VERSION = '1.1.0';
   const DB_NAME = 'wrongbook';
   const DB_VERSION = 1;
 
