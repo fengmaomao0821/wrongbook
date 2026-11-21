@@ -610,7 +610,7 @@ function openViewer(images, startIndex) {
     if (!api) return;
     const img = api.wrap.querySelector('.viewer-body img');
     const count = api.wrap.querySelector('.viewer-count');
-    img.src = thumbOf(list[idx]) || list[idx].url;
+    img.src = list[idx].url || thumbOf(list[idx]) || '';
     img.alt = '原题图片 ' + (idx + 1);
     count.textContent = (idx + 1) + ' / ' + list.length;
     const prev = api.wrap.querySelector('[data-act="prev"]');
@@ -646,6 +646,8 @@ function openViewer(images, startIndex) {
       }
     }
   );
+  // onMount 执行时 api 还没赋值，paint 会提前返回；这里补一次渲染
+  paint();
   document.addEventListener('keydown', onKey);
 }
 
@@ -1298,6 +1300,15 @@ function bindCaptureScreen(cs) {
       if (f) { try { URL.revokeObjectURL(f.url); } catch (e) { /* ignore */ } }
       cs.files.splice(i, 1);
       renderCaptureScreen();
+    });
+  });
+
+  // 点击待识别的预览图，全屏查看原图
+  $$('.preview-item img', main).forEach(function (img, idx) {
+    img.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      openViewer(cs.files.map(function (f) { return { url: f.url, thumb_url: f.url }; }), idx);
     });
   });
 
