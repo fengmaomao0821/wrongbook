@@ -34,7 +34,7 @@ const SUBJECT_COLORS = [
   '#65a30d', '#b45309', '#0d9488', '#be123c', '#6b7280'
 ];
 const AI_PRESETS = [
-  { key: 'dashscope', name: '阿里百炼（推荐，手机可直连）', base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-vl-plus' },
+  { key: 'dashscope', name: '阿里百炼（推荐，手机可直连）', base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen3-vl-plus' },
   { key: 'zhipu', name: '智谱 GLM（手机版直连会被拦）', base_url: 'https://open.bigmodel.cn/api/paas/v4', model: 'glm-4v-flash' },
   { key: 'ark', name: '火山方舟（手机版直连会被拦）', base_url: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-1-5-vision-pro-32k-250115' },
   { key: 'openai', name: 'OpenAI 兼容', base_url: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
