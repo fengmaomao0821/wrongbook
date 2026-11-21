@@ -35,9 +35,10 @@
     ai: {
       provider: 'dashscope',
       base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-      model: 'qwen-vl-plus',
-      api_key: '',
-      timeout_sec: 90
+      model: 'qwen3-vl-plus',
+      api_key: 'sk-ws-H.YXXYRRL.dN7O.MEYCIQDjkMno8QT22N2HFNg17HwTDfo-4F22Bz9WSZjvOY52owIhANWyyb2-BSFyj01ev6eD-WZ01Y8ERp5Fx5x86e9v9-2e',
+      timeout_sec: 90,
+      config_version: 2
     },
     review: { intervals: [1, 2, 4, 7, 15, 30, 60], mastery_streak: 4 },
     student: { name: '', grade: '初中' }
@@ -1878,6 +1879,21 @@
     const settings = await getAll('settings');
     if (!settings.length) {
       for (const key of Object.keys(DEFAULT_SETTINGS)) await setSetting(key, DEFAULT_SETTINGS[key]);
+    } else {
+      // 一次性迁移：把旧版默认（qwen-vl-plus / 业务空间地址 / 空 Key）纠正到当前可用配置
+      const stored = await getSettingsRaw();
+      const ai = stored.ai || {};
+      const version = Number(ai.config_version || 0);
+      if (version < 2) {
+        const merged = Object.assign({}, DEFAULT_SETTINGS.ai, ai);
+        merged.provider = 'dashscope';
+        merged.base_url = DEFAULT_SETTINGS.ai.base_url;
+        merged.model = DEFAULT_SETTINGS.ai.model;
+        merged.api_key = DEFAULT_SETTINGS.ai.api_key;
+        merged.timeout_sec = Math.max(90, Number(ai.timeout_sec) || 0);
+        merged.config_version = 2;
+        await setSetting('ai', merged);
+      }
     }
     const tasks = await getAll('tasks');
     for (const task of tasks) {
