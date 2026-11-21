@@ -1177,6 +1177,7 @@ function capturePickerSection(cs) {
     previewHTML = '<div class="preview-grid">' + cs.files.map(function (f, i) {
       return '<div class="preview-item">' +
         '<img src="' + esc(f.url) + '" alt="待识别图片 ' + (i + 1) + '">' +
+        '<button class="crop-btn" data-crop-file="' + i + '">框选</button>' +
         '<button class="remove" data-remove-file="' + i + '" aria-label="删除这张图片">' + icon('x') + '</button>' +
       '</div>';
     }).join('') + '</div>';
@@ -1194,6 +1195,256 @@ function capturePickerSection(cs) {
     previewHTML;
 }
 
+/* ---------- 拍照后框选题目 ---------- */
+
+function loadImageForCrop(file) {
+  if (typeof createImageBitmap === 'function') {
+    return createImageBitmap(file).catch(function () {
+      return loadImageElement(URL.createObjectURL(file));
+    });
+  }
+  return loadImageElement(URL.createObjectURL(file));
+}
+
+function loadImageElement(url) {
+  return new Promise(function (resolve, reject) {
+    const img = new Image();
+    img.onload = function () { resolve(img); };
+    img.onerror = function () { URL.revokeObjectURL(url); reject(new Error('图片解析失败')); };
+    img.src = url;
+  });
+}
+
+function openCropEditor(file, onDone) {
+  const url = URL.createObjectURL(file);
+  const boxes = [];
+  let img = null;
+  let stage = null;
+  let layer = null;
+  let imgRect = null;
+  let layerRect = null;
+  let drag = null;
+  let tempBox = null;
+  let closed = false;
+  let overlayApi = null;
+
+  function refreshRects() {
+    if (!img || !layer) return;
+    imgRect = img.getBoundingClientRect();
+    layerRect = layer.getBoundingClientRect();
+  }
+
+  function displayToNaturalBox(box) {
+    const scale = img.naturalWidth / imgRect.width;
+    const left = imgRect.left - layerRect.left;
+    const top = imgRect.top - layerRect.top;
+    return {
+      sx: Math.round((box.x - left) * scale),
+      sy: Math.round((box.y - top) * scale),
+      sw: Math.round(box.w * scale),
+      sh: Math.round(box.h * scale)
+    };
+  }
+
+  function updateCount() {
+    const btn = document.querySelector('[data-crop-act="confirm"]');
+    if (btn) btn.textContent = '完成（' + boxes.length + '）';
+  }
+
+  function renderBoxes() {
+    if (!layer) return;
+    layer.innerHTML = '';
+    boxes.forEach(function (box, index) {
+      const el = document.createElement('div');
+      el.className = 'crop-box';
+      el.style.left = box.x + 'px';
+      el.style.top = box.y + 'px';
+      el.style.width = box.w + 'px';
+      el.style.height = box.h + 'px';
+      el.innerHTML = '<span class="idx">' + (index + 1) + '</span>' +
+        '<button type="button" class="del" data-crop-del="' + index + '" aria-label="删除选区">×</button>';
+      layer.appendChild(el);
+    });
+    updateCount();
+  }
+
+  function close() {
+    if (closed) return;
+    closed = true;
+    try { URL.revokeObjectURL(url); } catch (e) { /* ignore */ }
+    if (overlayApi) overlayApi.close();
+  }
+
+  function bindLayer() {
+    layer.addEventListener('pointerdown', function (e) {
+      if (e.target.closest('[data-crop-del]')) return;
+      refreshRects();
+      if (e.clientX < imgRect.left || e.clientX > imgRect.right || e.clientY < imgRect.top || e.clientY > imgRect.bottom) return;
+      e.preventDefault();
+      drag = {
+        x: e.clientX - layerRect.left,
+        y: e.clientY - layerRect.top
+      };
+      tempBox = document.createElement('div');
+      tempBox.className = 'crop-box temp';
+      layer.appendChild(tempBox);
+      try { layer.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+    });
+
+    layer.addEventListener('pointermove', function (e) {
+      if (!drag || !tempBox) return;
+      e.preventDefault();
+      const curX = e.clientX - layerRect.left;
+      const curY = e.clientY - layerRect.top;
+      const left = Math.max(0, Math.min(drag.x, curX));
+      const top = Math.max(0, Math.min(drag.y, curY));
+      const width = Math.abs(curX - drag.x);
+      const height = Math.abs(curY - drag.y);
+      tempBox.style.left = left + 'px';
+      tempBox.style.top = top + 'px';
+      tempBox.style.width = width + 'px';
+      tempBox.style.height = height + 'px';
+      drag.w = width;
+      drag.h = height;
+      drag.left = left;
+      drag.top = top;
+    });
+
+    function finishDrag(e) {
+      if (!drag || !tempBox) return;
+      const box = {
+        x: drag.left !== undefined ? drag.left : drag.x,
+        y: drag.top !== undefined ? drag.top : drag.y,
+        w: drag.w || 0,
+        h: drag.h || 0
+      };
+      const ok = box.w >= 16 && box.h >= 16;
+      drag = null;
+      if (tempBox && tempBox.parentNode) tempBox.parentNode.removeChild(tempBox);
+      tempBox = null;
+      if (ok) {
+        boxes.push(box);
+        renderBoxes();
+      }
+      try { layer.releasePointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+    }
+
+    layer.addEventListener('pointerup', finishDrag);
+    layer.addEventListener('pointercancel', finishDrag);
+
+    layer.addEventListener('click', function (e) {
+      const del = e.target.closest('[data-crop-del]');
+      if (!del) return;
+      e.preventDefault();
+      e.stopPropagation();
+      boxes.splice(Number(del.dataset.cropDel), 1);
+      renderBoxes();
+    });
+  }
+
+  async function confirmCrop() {
+    if (!boxes.length) {
+      toast('请先在照片上框选要记录的题目（按住拖动）', 'error');
+      return;
+    }
+    refreshRects();
+    const confirmBtn = document.querySelector('[data-crop-act="confirm"]');
+    if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.textContent = '处理中…'; }
+    try {
+      const source = await loadImageForCrop(file);
+      const crops = [];
+      for (const box of boxes) {
+        const rect = displayToNaturalBox(box);
+        const sw = Math.max(8, Math.min(rect.sw, source.width - rect.sx));
+        const sh = Math.max(8, Math.min(rect.sh, source.height - rect.sy));
+        const canvas = document.createElement('canvas');
+        canvas.width = sw;
+        canvas.height = sh;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, sw, sh);
+        ctx.drawImage(source, rect.sx, rect.sy, sw, sh, 0, 0, sw, sh);
+        const blob = await new Promise(function (resolve) { canvas.toBlob(resolve, 'image/jpeg', 0.92); });
+        if (!blob) throw new Error('裁剪失败');
+        crops.push({ file: new File([blob], 'crop-' + (crops.length + 1) + '.jpg', { type: 'image/jpeg' }) });
+      }
+      close();
+      onDone(crops);
+    } catch (err) {
+      toast(err.message || '裁剪失败，请重试', 'error');
+      if (confirmBtn) { confirmBtn.disabled = false; updateCount(); }
+    }
+  }
+
+  overlayApi = openOverlay(
+    '<div class="crop-view">' +
+      '<div class="crop-head">' +
+        '<span>框选要记录的题目：按住拖动，可框多个</span>' +
+        '<button type="button" class="icon-btn" data-crop-act="close" aria-label="关闭">' + icon('x') + '</button>' +
+      '</div>' +
+      '<div class="crop-stage" id="cropStage">' +
+        '<img id="cropImg" alt="待裁剪照片">' +
+      '</div>' +
+      '<div class="crop-foot">' +
+        '<button type="button" class="btn ghost" data-crop-act="clear">清除</button>' +
+        '<button type="button" class="btn primary" data-crop-act="confirm">完成（0）</button>' +
+      '</div>' +
+    '</div>',
+    {
+      onClose: function () { closed = true; try { URL.revokeObjectURL(url); } catch (e) { /* ignore */ } },
+      onMount: function (a) {
+        stage = a.wrap.querySelector('#cropStage');
+        img = a.wrap.querySelector('#cropImg');
+        layer = document.createElement('div');
+        layer.className = 'crop-layer';
+        stage.appendChild(layer);
+        img.onload = function () {
+          if (typeof requestAnimationFrame === 'function') {
+            requestAnimationFrame(function () { refreshRects(); renderBoxes(); });
+          } else {
+            refreshRects();
+            renderBoxes();
+          }
+        };
+        img.src = url;
+        bindLayer();
+        a.wrap.querySelector('[data-crop-act="close"]').addEventListener('click', close);
+        a.wrap.querySelector('[data-crop-act="clear"]').addEventListener('click', function () {
+          boxes.length = 0;
+          renderBoxes();
+        });
+        a.wrap.querySelector('[data-crop-act="confirm"]').addEventListener('click', confirmCrop);
+      }
+    }
+  );
+}
+
+function applyCrops(cs, index, crops) {
+  if (!crops || !crops.length) return;
+  const item = cs.files[index];
+  if (!item) return;
+  try { URL.revokeObjectURL(item.url); } catch (e) { /* ignore */ }
+  if (crops.length === 1) {
+    cs.files[index] = {
+      file: crops[0].file,
+      url: URL.createObjectURL(crops[0].file),
+      cropped: true
+    };
+  } else {
+    const entries = crops.map(function (c) {
+      return { file: c.file, url: URL.createObjectURL(c.file), cropped: true };
+    });
+    cs.files.splice.apply(cs.files, [index, 1].concat(entries));
+    cs.separate = true;
+    if (cs.files.length > 6) {
+      cs.files.length = 6;
+      toast('最多保留 6 张图片', 'error');
+    }
+    toast('已拆成 ' + crops.length + ' 道题，可分别识别', 'success');
+  }
+  renderCaptureScreen();
+}
+
 function captureFormSection(cs) {
   const subjects = (state.boot && state.boot.subjects) || [];
   const subjectOptions = subjects.map(function (s) {
@@ -1208,6 +1459,11 @@ function captureFormSection(cs) {
       '<label class="field"><span class="field-label">科目</span>' +
         '<select class="select" id="capSubject"><option value="">自动判断</option>' + subjectOptions + '</select></label>' +
     '</div>' +
+    '<div class="field"><span class="field-label">多张图片识别方式</span>' +
+      '<div class="seg" id="capMode">' +
+        '<button type="button" data-mode="merge"' + (cs.separate ? '' : ' class="on"') + '>合并为一题</button>' +
+        '<button type="button" data-mode="separate"' + (cs.separate ? ' class="on"' : '') + '>每张各一题</button>' +
+      '</div></div>' +
   '</div>';
 }
 
@@ -1221,7 +1477,11 @@ function captureMainButtons(cs) {
       (aiCfg || ocrOk ? '开始识别' : '识别不可用') + '</button>' +
     '<button class="btn ghost block" id="btnManual">手动录入</button>' +
   '</div>' +
-  '<p class="tiny muted center" style="margin-top:12px">多张图片时按第一张识别生成草稿，其余图片会作为附加原图一起保存。</p>';
+  '<p class="tiny muted center" style="margin-top:12px">' +
+    (cs.files.length
+      ? '点图片上的「框选」可只保留其中某一道题；多张图默认合并为一题，可在上方切换为「每张各一题」。'
+      : '拍一张照片后，可用「框选」只保留需要记录的那道题。') +
+  '</p>';
 }
 
 function captureStageInfo(cs) {
@@ -1312,6 +1572,26 @@ function bindCaptureScreen(cs) {
     });
   });
 
+  // 框选题目
+  $$('[data-crop-file]').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      const index = Number(btn.dataset.cropFile);
+      const item = cs.files[index];
+      if (!item) return;
+      openCropEditor(item.file, function (crops) { applyCrops(cs, index, crops); });
+    });
+  });
+
+  // 多张图片识别方式切换
+  $$('#capMode [data-mode]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      cs.separate = btn.dataset.mode === 'separate';
+      renderCaptureScreen();
+    });
+  });
+
   const source = $('#capSource');
   if (source) source.addEventListener('input', function () { cs.form.source = source.value; });
   const date = $('#capDate');
@@ -1365,6 +1645,10 @@ async function startRecognize() {
   const cs = captureState();
   if (cs.busy) return;
   if (!cs.files.length) return;
+  if (cs.separate && cs.files.length > 1) {
+    startBatchRecognize(cs);
+    return;
+  }
   stopCaptureTimers(cs);
   cs.busy = true;
   cs.error = '';
@@ -1454,6 +1738,100 @@ function capturePollTask() {
   addCleanup(function () { stopPollTimer(cs); });
 }
 
+async function startBatchRecognize(cs) {
+  stopCaptureTimers(cs);
+  cs.busy = true;
+  cs.error = '';
+  cs.uploaded = [];
+  cs.taskId = null;
+  cs.task = null;
+  cs.engine = '';
+  cs.startedAt = Date.now();
+  cs.batchTasks = [];
+  renderCaptureScreen();
+  startElapsedTimer(cs);
+  try {
+    const uploaded = [];
+    for (let i = 0; i < cs.files.length; i++) {
+      const fd = new FormData();
+      fd.append('file', cs.files[i].file, cs.files[i].file.name || ('photo-' + (i + 1) + '.jpg'));
+      const up = await apiUpload('/api/upload', fd);
+      uploaded.push(up);
+      cs.uploaded.push(up);
+      updateCaptureProgress(cs);
+    }
+    const baseBody = { mode: 'auto' };
+    if (cs.form.subjectId) baseBody.subject_hint = Number(cs.form.subjectId);
+    for (const up of uploaded) {
+      const body = Object.assign({ image_ids: [up.id] }, baseBody);
+      const rec = await api('/api/recognize', { method: 'POST', body: body });
+      cs.batchTasks.push({ taskId: rec.task_id, upload: up, done: false, failed: false, draft: null });
+    }
+    renderCaptureScreen();
+    capturePollBatch(cs);
+  } catch (err) {
+    stopCaptureTimers(cs);
+    cs.busy = false;
+    cs.error = err.message || '上传或识别失败';
+    renderCaptureScreen();
+    toast(cs.error, 'error');
+  }
+}
+
+function capturePollBatch(cs) {
+  stopPollTimer(cs);
+  const tick = async function () {
+    if (state.capture !== cs) return;
+    let pending = 0;
+    const drafts = [];
+    for (const item of cs.batchTasks) {
+      if (!item.taskId) { item.failed = true; continue; }
+      let t;
+      try { t = await api('/api/tasks/' + item.taskId); } catch (err) { pending++; continue; }
+      if (t.status === 'done') {
+        if (!item.done) {
+          item.done = true;
+          const draft = Object.assign({}, t.result || {});
+          draft.image_ids = [item.upload.id];
+          draft.images = [item.upload];
+          draft.engine = draft.engine || 'ai';
+          if (!draft.exam_name) draft.exam_name = cs.form.source || '';
+          if (!draft.exam_date) draft.exam_date = cs.form.date || '';
+          if (!draft.subject_id && cs.form.subjectId) draft.subject_id = Number(cs.form.subjectId);
+          item.draft = draft;
+        }
+        drafts.push(item.draft);
+      } else if (t.status === 'failed') {
+        item.failed = true;
+      } else {
+        pending++;
+      }
+    }
+    if (state.capture !== cs) return;
+    cs.task = { stage: 'ai', stage_label: '批量识别中（已完成 ' + drafts.length + '/' + cs.batchTasks.length + '）' };
+    const sub = document.getElementById('capTaskSub');
+    if (sub) sub.textContent = '已用 ' + captureElapsed(cs) + ' 秒 · 已完成 ' + drafts.length + ' / ' + cs.batchTasks.length;
+    if (pending > 0) return;
+    stopCaptureTimers(cs);
+    cs.busy = false;
+    const failed = cs.batchTasks.filter(function (item) { return item.failed; }).length;
+    if (!drafts.length) {
+      cs.error = failed ? '识别失败，请重试' : '没有识别结果';
+      renderCaptureScreen();
+      return;
+    }
+    state.batch = { drafts: drafts.slice(), index: 0, total: drafts.length };
+    state.draft = state.batch.drafts[0];
+    saveDraft();
+    resetCaptureAfterTask(cs, true);
+    toast('识别完成：' + drafts.length + ' 道题，逐题校对保存' + (failed ? '（' + failed + ' 张失败）' : ''), 'success');
+    navigate('#/edit/new?batch=' + drafts.length);
+  };
+  tick();
+  cs.pollTimer = setInterval(tick, 800);
+  addCleanup(function () { stopPollTimer(cs); });
+}
+
 function startElapsedTimer(cs) {
   stopElapsedTimer(cs);
   cs.elapsedTimer = setInterval(function () {
@@ -1472,6 +1850,7 @@ function resetCaptureAfterTask(cs, keepForm) {
   cs.error = '';
   cs.startedAt = 0;
   cs.uploaded = [];
+  cs.batchTasks = [];
   cs.files.forEach(function (f) { try { URL.revokeObjectURL(f.url); } catch (e) { /* ignore */ } });
   cs.files = [];
   if (!keepForm) cs.form = { source: '', date: todayStr(), subjectId: '' };
@@ -1594,9 +1973,10 @@ function openEditForm(question, src, isNew, subjects) {
     dupIgnored: false,
     similarTimer: null
   };
+  const batch = isNew && state.batch ? state.batch : null;
   setAppbar({
     left: '<button class="appbar-text-btn" data-appbar-act="close">关闭</button>',
-    title: isNew ? '校对并保存' : '编辑错题',
+    title: isNew ? (batch ? '校对第 ' + (batch.index + 1) + '/' + batch.total + ' 题' : '校对并保存') : '编辑错题',
     center: true,
     rightHTML: '<button class="appbar-text-btn" data-appbar-act="save">保存</button>',
     handlers: {
@@ -1611,6 +1991,15 @@ function openEditForm(question, src, isNew, subjects) {
     '<button class="btn ghost block" id="btnSaveAgain">保存并再拍一题</button>'
   );
   bindEditForm(isNew, subjects);
+  if (batch) {
+    const page = main.querySelector('.page');
+    if (page) {
+      const tip = document.createElement('div');
+      tip.className = 'batch-tip';
+      tip.textContent = '批量识别：第 ' + (batch.index + 1) + ' / ' + batch.total + ' 题，保存后自动进入下一题';
+      page.prepend(tip);
+    }
+  }
   const saveBtn = $('#btnSave');
   if (saveBtn) saveBtn.addEventListener('click', function () { saveEdit(false); });
   const saveAgain = $('#btnSaveAgain');
@@ -1755,8 +2144,23 @@ function showFieldError(fieldId, hasError) {
   field.classList.toggle('has-error', !!hasError);
 }
 
-function closeEdit(force) {
+async function closeEdit(force) {
   const e = state.edit;
+  if (!force && state.batch) {
+    const batch = state.batch;
+    const remain = Math.max(1, batch.total - batch.index);
+    const ok = await confirmDialog({
+      title: '退出批量校对？',
+      message: '还有 ' + remain + ' 道识别结果未保存，退出后会丢失。',
+      okText: '退出',
+      cancelText: '继续校对',
+      danger: true
+    });
+    if (!ok) return;
+    state.batch = null;
+    state.draft = null;
+    clearDraft();
+  }
   if (e && e.dirty && !force) {
     navigate(state.prevHash && state.prevHash !== location.hash ? state.prevHash : '#/capture');
     return;
@@ -1809,10 +2213,35 @@ async function saveEdit(again) {
     e.saving = false;
     e.dirty = false;
     state.guard = null;
+    refreshBootstrap();
+    if (state.batch && e.isNew) {
+      const batch = state.batch;
+      if (again) {
+        state.batch = null;
+        state.draft = null;
+        clearDraft();
+        toast('已保存，本批剩余未保存的题已取消', 'success');
+        navigate('#/capture');
+        return;
+      }
+      if (batch.index + 1 < batch.drafts.length) {
+        batch.index += 1;
+        state.draft = batch.drafts[batch.index];
+        saveDraft();
+        toast('已保存（' + batch.index + '/' + batch.total + '），继续校对下一题', 'success');
+        openEditForm(null, state.draft, true, (state.boot && state.boot.subjects) || []);
+        return;
+      }
+      state.batch = null;
+      state.draft = null;
+      clearDraft();
+      toast('本批 ' + batch.total + ' 道题已全部保存', 'success');
+      navigate('#/question/' + savedId);
+      return;
+    }
     state.draft = null;
     clearDraft();
     toast(e.isNew ? '已保存，已加入复习计划' : '修改已保存', 'success');
-    refreshBootstrap();
     if (again) navigate('#/capture');
     else navigate('#/question/' + savedId);
   } catch (err) {
