@@ -3280,9 +3280,10 @@ function settingsHTML(s) {
       '<div class="sect-body">' +
         '<div class="about-rows">' +
           '<div class="about-row"><span class="k">当前地址</span><span class="v mono">' + esc(location.origin) + '</span></div>' +
-          '<div class="about-row"><span class="k">版本</span><span class="v">错题本 ' + esc((state.boot && state.boot.server && state.boot.server.version) || '1.0.0-pwa') + '</span></div>' +
+          '<div class="about-row"><span class="k">版本</span><span class="v">错题本 ' + esc((state.boot && state.boot.server && state.boot.server.version) || '1.1.0') + '</span></div>' +
         '</div>' +
         '<div class="tip-box">' + icon('phone') + ' 手机版：把本页「添加到主屏幕」后像 App 一样使用；数据只保存在本机浏览器，不上传服务器。断网也能录入、复习、统计。</div>' +
+        '<button class="btn ghost" id="btnForceUpdate" style="margin-top:12px">检查更新 / 强制刷新</button>' +
       '</div>' +
     '</details>' +
 
@@ -3438,6 +3439,30 @@ function bindSettingsScreen(s) {
         window.location.href = '/api/backup';
       }
     }
+  });
+
+  const forceUpdate = $('#btnForceUpdate');
+  if (forceUpdate) forceUpdate.addEventListener('click', async function () {
+    const ok = await confirmDialog({
+      title: '强制更新？',
+      message: '会清除离线缓存并重新加载网页，不会删除已录入的错题。请保持联网。',
+      okText: '更新',
+      cancelText: '取消'
+    });
+    if (!ok) return;
+    forceUpdate.disabled = true;
+    forceUpdate.classList.add('loading');
+    try {
+      if (window.caches) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map(function (key) { return caches.delete(key); }));
+      }
+      if (navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map(function (reg) { return reg.unregister(); }));
+      }
+    } catch (err) { /* 忽略 */ }
+    location.reload();
   });
 
   if (WB_LOCAL && window.WBLocal) {
