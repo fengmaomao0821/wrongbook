@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#f5f6f8">
+<meta name="description" content="错题本 · 手机本地版：拍照录题、艾宾浩斯复习、错因统计">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="错题本">
+<meta name="format-detection" content="telephone=no">
+<link rel="manifest" href="./manifest.json">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<link rel="icon" href="./icons/icon-192.png">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<link rel="stylesheet" href="./style.css">
+<title>错题本</title>
+</head>
+<body>
+<div id="app">
+  <header id="appbar" class="appbar" hidden></header>
+  <main id="main" class="main">
+    <div class="boot-skeleton" aria-hidden="true">
+      <div class="skel" style="height:132px;border-radius:14px"></div>
+      <div class="skel" style="height:18px;width:42%;margin:22px 0 12px"></div>
+      <div class="skel" style="height:96px;border-radius:14px;margin-bottom:10px"></div>
+      <div class="skel" style="height:96px;border-radius:14px;margin-bottom:10px"></div>
+      <div class="skel" style="height:96px;border-radius:14px"></div>
+    </div>
+  </main>
+  <nav id="tabbar" class="tabbar" hidden aria-label="主导航"></nav>
+</div>
+
+<div id="toast-wrap" class="toast-wrap" aria-live="polite" aria-atomic="true"></div>
+<div id="overlay-root"></div>
+
+<script>window.WB_LOCAL = true;</script>
+<script async src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"
+        onload="window.__katexReady && window.__katexReady()"
+        onerror="window.__katexFailed = true"></script>
+<script src="./localdb.js"></script>
+<script src="./app.js"></script>
+<script>
+(function () {
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      navigator.serviceWorker.register('./sw.js').catch(function () { /* 离线安装失败时不影响使用 */ });
+    });
+  }
+})();
+</script>
+</body>
+</html>
